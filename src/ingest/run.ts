@@ -22,6 +22,8 @@ export interface IngestResult {
   incomplete: string[];
   status: "ok" | "error";
   error?: string;
+  /** Set when rows were upserted but closing the run record failed. */
+  bookkeeping_error?: string;
 }
 
 /**
@@ -228,26 +230,32 @@ export async function ingestDays(
     result.error = e instanceof Error ? e.message : String(e);
   }
 
-  await env.DB.prepare(
-    `UPDATE ingest_runs SET finished_at=?2, pages_fetched=?3, cache_hits=?4,
-       rows_seen=?5, rows_upserted=?6, rows_skipped=?7, status=?8, error=?9
-     WHERE id=?1`,
-  )
-    .bind(
-      runId,
-      nowIso(),
-      result.pages_fetched,
-      result.cache_hits,
-      result.rows_seen,
-      result.rows_upserted,
-      result.rows_skipped,
-      result.status,
-      result.error ??
-        (result.incomplete.length > 0
-          ? `incomplete reads: ${result.incomplete.join("; ")}`
-          : null),
+  // Bookkeeping, in its own try for the same reason as in detect/run.ts: rows
+  // that were upserted stay upserted whether or not the run record closes.
+  try {
+    await env.DB.prepare(
+      `UPDATE ingest_runs SET finished_at=?2, pages_fetched=?3, cache_hits=?4,
+         rows_seen=?5, rows_upserted=?6, rows_skipped=?7, status=?8, error=?9
+       WHERE id=?1`,
     )
-    .run();
+      .bind(
+        runId,
+        nowIso(),
+        result.pages_fetched,
+        result.cache_hits,
+        result.rows_seen,
+        result.rows_upserted,
+        result.rows_skipped,
+        result.status,
+        result.error ??
+          (result.incomplete.length > 0
+            ? `incomplete reads: ${result.incomplete.join("; ")}`
+            : null),
+      )
+      .run();
+  } catch (e) {
+    result.bookkeeping_error = e instanceof Error ? e.message : String(e);
+  }
 
   return result;
 }

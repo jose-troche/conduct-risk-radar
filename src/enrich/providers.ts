@@ -29,8 +29,12 @@ async function runWorkersAi(env: Env, variant: Variant, prompt: string): Promise
     response?: string;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
+  // Workers AI usually returns `response` as a string, but not always - some
+  // models hand back an object. Coercing here keeps a surprising shape from
+  // throwing later, where it would lose the enrichment record entirely.
+  const raw = res?.response;
   return {
-    text: res?.response ?? "",
+    text: typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw),
     input_tokens: res?.usage?.prompt_tokens ?? null,
     output_tokens: res?.usage?.completion_tokens ?? null,
     latency_ms: Date.now() - started,

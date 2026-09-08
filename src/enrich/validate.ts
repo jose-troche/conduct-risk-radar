@@ -52,12 +52,45 @@ const CITATION_RE = /\[\s*(\d{4,})\s*\]/g;
  *  silently makes every other sentence look uncited. */
 const HAS_CITATION = /\[\s*\d{4,}\s*\]/;
 
+/**
+ * Abbreviations that end in a period and do not end a sentence. Institution
+ * names in this data are full of them - "U.S. Bancorp", "JPMORGAN CHASE & CO.",
+ * "CITIBANK, N.A." - and a naive split turns "issues with U.S. Bancorp" into a
+ * sentence ending at "U.S." with no citation on it. That was scored as an
+ * uncited assertion and failed enrichments that were perfectly well cited.
+ */
+// Case-insensitive, because company names in this data are shouted:
+// "JPMORGAN CHASE & CO." and "CITIBANK, N.A." both appear verbatim.
+const ABBREV_WORD =
+  /\b(?:U\.S|N\.A|L\.P|Inc|Co|Corp|Ltd|LLC|Mr|Mrs|Ms|Dr|Jr|Sr|St|No|vs|etc|e\.g|i\.e|Fig|Assn|Dept|Div|Natl)\.$/i;
+/** A lone initial, as in "Charles J. Smith". */
+const ABBREV_INITIAL = /\b[A-Z]\.$/;
+
+/**
+ * Merging is deliberately the conservative direction here. If this wrongly
+ * joins two real sentences, one citation covers both - a slight loosening of
+ * the gate. If it wrongly splits one, a correctly cited draft is thrown away.
+ * The second failure is worse and was the one actually happening.
+ */
+function endsWithAbbreviation(s: string): boolean {
+  return ABBREV_WORD.test(s) || ABBREV_INITIAL.test(s);
+}
+
 /** Split on sentence terminators, keeping the citation markers attached. */
-function sentences(text: string): string[] {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+export function sentences(text: string): string[] {
+  const parts = text.split(/(?<=[.!?])\s+/);
+  const out: string[] = [];
+  for (const part of parts) {
+    const prev = out[out.length - 1];
+    // A fragment that ends in an abbreviation is not a finished sentence, so
+    // glue it to whatever follows.
+    if (prev !== undefined && endsWithAbbreviation(prev)) {
+      out[out.length - 1] = `${prev} ${part}`;
+    } else {
+      out.push(part);
+    }
+  }
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**

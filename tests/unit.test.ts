@@ -449,3 +449,38 @@ describe("KV cache key", () => {
     );
   });
 });
+
+describe("sentence splitting", () => {
+  it("does not break a sentence at an institution-name abbreviation", async () => {
+    const { sentences } = await import("../src/enrich/validate");
+    // Observed in production: "issues with U.S. Bancorp" split into a sentence
+    // ending at "U.S." carrying no citation, and failed a well-cited draft.
+    expect(
+      sentences("Several consumers describe issues with U.S. Bancorp [12345678]."),
+    ).toHaveLength(1);
+    expect(
+      sentences("Consumers were denied accounts at JPMORGAN CHASE & CO. [12345678]."),
+    ).toHaveLength(1);
+    expect(sentences("One thing happened. Another thing happened.")).toHaveLength(2);
+  });
+
+  it("still splits genuine sentence boundaries", async () => {
+    const { sentences } = await import("../src/enrich/validate");
+    expect(sentences("A holds claim [1]. A fees claim [2]. A third [3].")).toHaveLength(3);
+  });
+});
+
+describe("abbreviation handling end to end", () => {
+  it("passes a cited draft that mentions U.S. Bancorp", () => {
+    const draft = JSON.stringify({
+      summary:
+        "Several consumers describe difficulty reaching U.S. Bancorp about mortgage relief [12345678]. A second consumer reports the same [87654321].",
+      proposed_severity: "high",
+      reasoning:
+        "The volume_anomaly signal dominates the triage priority score. Both narratives describe the same handling pattern [12345678] [87654321].",
+      citations: ["12345678", "87654321"],
+      signals_referenced: ["volume_anomaly"],
+    });
+    expect(validate(draft, packet).status).toBe("ok");
+  });
+});

@@ -30,6 +30,8 @@ export interface DetectionResult {
   alerts_stale: number;
   status: "ok" | "error";
   error?: string;
+  /** Set when the run itself succeeded but closing its run record did not. */
+  bookkeeping_error?: string;
 }
 
 interface Windows {
@@ -317,21 +319,31 @@ ON CONFLICT(cell_key, signal_type) DO UPDATE SET
     result.error = e instanceof Error ? e.message : String(e);
   }
 
-  await env.DB.prepare(
-    `UPDATE detection_runs SET finished_at=?2, cells_examined=?3, cells_scored=?4,
-       alerts_created=?5, alerts_updated=?6, status=?7, error=?8 WHERE id=?1`,
-  )
-    .bind(
-      runId,
-      nowIso(),
-      result.cells_examined,
-      result.cells_scored,
-      result.alerts_created,
-      result.alerts_updated,
-      result.status,
-      result.error ?? null,
+  // Closing the run record must never turn a completed run into a reported
+  // failure. This UPDATE is bookkeeping: if it throws - and on a metered write
+  // budget it can - the alerts are already committed and the caller is entitled
+  // to the result. The failure is attached to the result instead of replacing
+  // it, which is how a run that persisted 36 alerts once got reported as an
+  // internal error.
+  try {
+    await env.DB.prepare(
+      `UPDATE detection_runs SET finished_at=?2, cells_examined=?3, cells_scored=?4,
+         alerts_created=?5, alerts_updated=?6, status=?7, error=?8 WHERE id=?1`,
     )
-    .run();
+      .bind(
+        runId,
+        nowIso(),
+        result.cells_examined,
+        result.cells_scored,
+        result.alerts_created,
+        result.alerts_updated,
+        result.status,
+        result.error ?? null,
+      )
+      .run();
+  } catch (e) {
+    result.bookkeeping_error = e instanceof Error ? e.message : String(e);
+  }
 
   return result;
 }

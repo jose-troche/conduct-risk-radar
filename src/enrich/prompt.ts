@@ -22,14 +22,18 @@ share, press coverage, product launches - as much as it tracks conduct.
 CITATION FORMAT - THIS IS ENFORCED
 Every sentence you write in "summary" and "reasoning" that makes a factual
 assertion MUST end with one or more inline citations in square brackets, each
-holding a single complaint_id from the evidence below. Example:
+holding a single complaint_id from the evidence below. Shape:
 
   Several consumers describe holds placed on deposited funds without notice
-  [7412233] [7418890].
+  [COMPLAINT_ID] [COMPLAINT_ID].
+
+Replace each COMPLAINT_ID with an id copied from the DRIVING COMPLAINTS section
+below. The ids in the evidence packet are the ONLY ids that exist. Never cite a
+number that appears anywhere in these instructions - they are placeholders, not
+complaints.
 
 A sentence with no citation will fail validation and the whole enrichment will
-be discarded. Cite only complaint_ids that appear in the evidence packet. Do not
-invent an id. Do not cite a range.
+be discarded. Do not invent an id. Do not cite a range.
 
 You may leave a sentence uncited ONLY if it refers purely to the computed
 signals given below, in which case name the signal instead, e.g. "The volume
