@@ -263,9 +263,19 @@ exactly the kind of result the per-segment gate exists to catch.
 ./scripts/finish.sh https://conduct-risk-radar.troche.workers.dev "$(cat .admin-token)"
 ```
 
-Applies migration 0002 first so every subsequent write is cheaper, tops up the
-window, re-runs detection, enriches with both Workers AI variants, writes the
-seed label set, and runs the eval. Idempotent throughout.
+Tops up the window, re-runs detection, enriches with both Workers AI variants,
+writes the seed label set, and runs the eval. Idempotent throughout, so a failed
+step can simply be re-run.
+
+Migration 0002 is opt-in and wants a day to itself: rebuilding the composite
+index across 86k complaints costs ~86k row writes, most of a day's free-tier
+budget, which would leave nothing for the pipeline above. It pays for itself on
+every backfill afterwards.
+
+```bash
+./scripts/finish.sh <base> <token> --with-migration   # one day, migration only
+./scripts/finish.sh <base> <token>                    # next day, the rest
+```
 
 ---
 

@@ -14,37 +14,50 @@
 #
 set -euo pipefail
 
-BASE="${1:?usage: finish.sh <base-url> <admin-token>}"
-TOKEN="${2:?usage: finish.sh <base-url> <admin-token>}"
+BASE="${1:?usage: finish.sh <base-url> <admin-token> [--with-migration]}"
+TOKEN="${2:?usage: finish.sh <base-url> <admin-token> [--with-migration]}"
+WITH_MIGRATION="${3:-}"
 AUTH=(-H "authorization: Bearer ${TOKEN}")
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
-step "1/6  Trim the indexes on complaints (5 row-writes per complaint -> 2)"
-# Do this FIRST. Every write after it is cheaper, and rebuilding the one
-# composite index costs a single pass rather than four.
-npx wrangler d1 migrations apply crr-db --remote
+# Migration 0002 rebuilds an index across ~86k complaints, which is ~86k row
+# writes on its own - most of a day's free-tier budget. It pays for itself on
+# every backfill afterwards, but running it on the same day as this pipeline
+# would leave nothing for the pipeline. So it is opt-in, and it wants a day of
+# its own:
+#
+#   ./scripts/finish.sh <base> <token> --with-migration   # day one, migration only
+#   ./scripts/finish.sh <base> <token>                    # day two, the rest
+if [ "$WITH_MIGRATION" = "--with-migration" ]; then
+  step "Trim the indexes on complaints (5 row-writes per complaint -> 2)"
+  npx wrangler d1 migrations apply crr-db --remote
+  echo
+  echo "Index rebuilt. That is most of today's write budget; run this script"
+  echo "again without --with-migration after the next reset for the rest."
+  exit 0
+fi
 
-step "2/6  Top up the rolling window"
+step "1/5  Top up the rolling window"
 # Only the most recent days are missing; the rest are already on file and will
 # report as unchanged, writing nothing.
 node scripts/backfill.mjs "$BASE" "$TOKEN" 160 5
 
-step "3/6  Re-run detection"
+step "2/5  Re-run detection"
 curl -sS -X POST "${AUTH[@]}" "$BASE/api/admin/detect" | python3 -m json.tool
 
-step "4/6  Enrich the queue with both Workers AI variants"
+step "3/5  Enrich the queue with both Workers AI variants"
 # Two variants, same labelled set, so the eval has something to compare.
 node scripts/enrich.mjs "$BASE" "$TOKEN" v1-workers-ai 3
 node scripts/enrich.mjs "$BASE" "$TOKEN" v2-workers-ai-terse 3
 
-step "5/6  Write the seed label set"
+step "4/5  Write the seed label set"
 # A stated rubric, NOT judgements - see the header of seed-labels.mjs. This
 # exists so the eval machinery can be exercised; replace it with labels captured
 # through the UI before reporting any agreement number.
 node scripts/seed-labels.mjs "$BASE" "$TOKEN" seed-rubric
 
-step "6/6  Run the evaluation against the seed labels"
+step "5/5  Run the evaluation against the seed labels"
 curl -sS -X POST "${AUTH[@]}" -H 'content-type: application/json' \
   -d '{"analyst_id":"seed-rubric","notes":"rubric smoke test, not a result"}' \
   "$BASE/api/eval/runs" | python3 -m json.tool
