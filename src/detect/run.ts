@@ -191,9 +191,28 @@ export async function runDetection(
     result.cells_scored = allCells.length;
     const candidates = allCells.filter((c) => c.score >= DETECTION.alertThreshold);
 
-    // Persist the baselines the run used, so an alert's score is reconstructible
-    // later without recomputing anything.
-    await persistBaselines(env, w, bCells, bMedian, mixByCell, companyTotalsB, marketB, marketTotalB);
+    // Persist the baselines behind the alerts this run raised, so an alert's
+    // score stays reconstructible without recomputing anything.
+    //
+    // Only the alert-backing cells, not all of them. D1's free tier meters row
+    // writes at 100k/day and writing every scored cell's baseline on every run
+    // spends that budget on rows nothing will ever read - the baseline for a
+    // cell that raised no alert is not referenced by anything.
+    const alertingCells = new Map<string, CellAgg>();
+    for (const c of candidates) {
+      const b = bCells.get(c.cell.cell_key);
+      if (b) alertingCells.set(c.cell.cell_key, b);
+    }
+    await persistBaselines(
+      env,
+      w,
+      alertingCells,
+      bMedian,
+      mixByCell,
+      companyTotalsB,
+      marketB,
+      marketTotalB,
+    );
 
     // Drivers: the complaints behind each alert, fetched only for cells that
     // actually produced one. D1 caps bound parameters at 100 per query, so the

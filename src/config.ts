@@ -157,10 +157,23 @@ export const DETECTION = {
    * than it wrecks a count.
    */
   minShareDenominator: 20,
-  /** Alerts below this score are not persisted. */
-  alertThreshold: 35,
-  /** Enrichment only runs at or above this score. */
-  enrichThreshold: 45,
+  /**
+   * Alerts below this score are not persisted.
+   *
+   * Set against the observed distribution rather than picked as a round
+   * number. Over 128 scored cells the score runs median 11.7, p75 20.9,
+   * p90 34.8, max 58.3, so a floor of 20 admits roughly the top quarter -
+   * a queue of about 36 alerts, which is a plausible amount of work rather
+   * than a wall of noise.
+   */
+  alertThreshold: 20,
+  /**
+   * Enrichment only runs at or above this score. Higher than the queue floor
+   * on purpose: the deterministic alert is what has to stand up, and model
+   * budget is spent only on the part of the queue where a drafted rationale
+   * would actually save an analyst time.
+   */
+  enrichThreshold: 25,
   /**
    * Company responses that mean the complaint has reached a final state.
    * Signals about timeliness and response mix are computed over settled
