@@ -39,25 +39,49 @@ export interface CfpbPage {
 }
 
 /**
- * One day of the scope, paginated. The day is the unit of work because a day of
- * the scoped feed is roughly 350 records - small enough to parse inside the
- * free tier's 10ms CPU budget, and stable enough to cache as a unit.
+ * One day of the scope, in one request.
+ *
+ * The day is the unit of work for two reasons. It is small enough to parse
+ * inside the free tier's 10ms CPU budget, and it is the only unit this API can
+ * actually be read whole: the search endpoint silently ignores frm/from, so
+ * there is no offset to walk. Asking for a slice larger than the day is the
+ * pagination strategy, and the caller checks the returned count against the
+ * reported total to prove nothing was cut off.
+ *
+ * `products` narrows the request when a whole day overflows a single response.
  */
-export function pageUrl(day: string, offset: number): string {
+export function pageUrl(day: string, products: readonly string[] = SCOPE.products): string {
   const u = new URL(INGEST.apiBase);
   u.searchParams.set("date_received_min", day);
   u.searchParams.set("date_received_max", day);
   u.searchParams.set("size", String(INGEST.pageSize));
-  u.searchParams.set("frm", String(offset));
   u.searchParams.set("sort", "created_date_desc");
   u.searchParams.set("no_aggs", "true");
-  for (const p of SCOPE.products) u.searchParams.append("product", p);
+  for (const p of products) u.searchParams.append("product", p);
   for (const c of SCOPE.companies) u.searchParams.append("company", c);
   return u.toString();
 }
 
-export function cacheKey(day: string, offset: number): string {
-  return `cfpb:v1:${SCOPE.products.length}x${SCOPE.companies.length}:${day}:${offset}`;
+/**
+ * A short fingerprint of the exact scope a cached page was fetched under.
+ *
+ * Keying on the number of products and companies is not enough: swapping one
+ * product for another, or adding one while removing another, leaves the counts
+ * identical and would serve pages fetched under the old scope as though they
+ * were the new one. The cache would then be quietly, permanently wrong.
+ */
+function scopeFingerprint(products: readonly string[]): string {
+  const s = [...products].sort().join("\u0001") + "\u0002" + [...SCOPE.companies].sort().join("\u0001");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+export function cacheKey(day: string, products: readonly string[] = SCOPE.products): string {
+  return `cfpb:v3:${scopeFingerprint(products)}:${day}`;
 }
 
 /**

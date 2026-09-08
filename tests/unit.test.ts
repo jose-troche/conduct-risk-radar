@@ -154,6 +154,8 @@ function agg(over: Partial<CellAgg> = {}): CellAgg {
     n_settled: 60,
     n_untimely: 3,
     n_adverse: 30,
+    rd_sum: 0,
+    rd_n: 60,
     ...over,
   };
 }
@@ -428,5 +430,22 @@ describe("agreement classification", () => {
     // it into the agreement denominator would confuse two different problems.
     expect(classify("high", "high", false)).toBe("no_output");
     expect(classify(null, "high", true)).toBe("no_output");
+  });
+});
+
+describe("KV cache key", () => {
+  it("distinguishes scopes that have the same shape but different members", async () => {
+    const { cacheKey } = await import("../src/ingest/cfpb");
+    // Same count, different members. Keying on length alone would collide and
+    // serve pages fetched under the old scope as though they were the new one.
+    expect(cacheKey("2026-06-01", ["Credit card"])).not.toBe(
+      cacheKey("2026-06-01", ["Mortgage"]),
+    );
+    expect(cacheKey("2026-06-01", ["Credit card", "Mortgage"])).toBe(
+      cacheKey("2026-06-01", ["Mortgage", "Credit card"]),
+    );
+    expect(cacheKey("2026-06-01", ["Credit card"])).not.toBe(
+      cacheKey("2026-06-02", ["Credit card"]),
+    );
   });
 });

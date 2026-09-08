@@ -18,37 +18,52 @@ export interface IngestResult {
   rows_seen: number;
   rows_upserted: number;
   rows_skipped: number;
+  /** Slices the source said were larger than the response it returned. */
+  incomplete: string[];
   status: "ok" | "error";
   error?: string;
 }
 
-/** One page of one day. Returns the raw hits and whether KV served it. */
-async function fetchPage(
+/**
+ * One slice of one day. Returns the hits, the total the source says exist for
+ * that slice, and whether KV served it.
+ *
+ * The total matters: this API has no usable offset, so a returned count equal
+ * to the requested size is indistinguishable from a truncated read. Carrying
+ * the total back is what lets the caller notice.
+ */
+async function fetchSlice(
   env: Env,
   day: string,
-  offset: number,
-): Promise<{ hits: { _source: unknown }[]; cached: boolean }> {
-  const key = cacheKey(day, offset);
+  products: readonly string[],
+): Promise<{ hits: { _source: unknown }[]; total: number; cached: boolean }> {
+  const key = cacheKey(day, products);
   const cached = await env.RAW_CACHE.get(key, "json");
   if (cached) {
-    return { hits: (cached as CfpbPage).hits.hits, cached: true };
+    const page = cached as CfpbPage;
+    return {
+      hits: page.hits.hits,
+      total: page.hits.total?.value ?? page.hits.hits.length,
+      cached: true,
+    };
   }
-  const res = await fetch(pageUrl(day, offset), {
+  const res = await fetch(pageUrl(day, products), {
     headers: { accept: "application/json", "user-agent": "conduct-risk-radar" },
   });
   if (!res.ok) {
-    throw new Error(`CFPB ${res.status} for ${day}+${offset}`);
+    throw new Error(`CFPB ${res.status} for ${day}`);
   }
   const body = (await res.json()) as CfpbPage;
   const hits = body?.hits?.hits ?? [];
-  // Only the hits are cached, not the whole envelope: the aggregation and
-  // break-point sections of the response are large and we never read them.
+  const total = body?.hits?.total?.value ?? hits.length;
+  // Only the hits and the total are cached. The aggregation and break-point
+  // sections of the envelope are large and nothing here reads them.
   await env.RAW_CACHE.put(
     key,
-    JSON.stringify({ hits: { hits, total: body?.hits?.total ?? { value: hits.length } } }),
+    JSON.stringify({ hits: { hits, total: { value: total } } }),
     { expirationTtl: ttlFor(day) },
   );
-  return { hits, cached: false };
+  return { hits, total, cached: false };
 }
 
 /**
@@ -132,8 +147,53 @@ async function upsertAll(
   return { upserted, skipped: rows.length - upserted };
 }
 
-/** Ingest a specific list of days. Each day is fetched page by page until the
- *  source runs out of records for it. */
+/**
+ * Ingest one day.
+ *
+ * The whole day is requested in a single oversized read. If the source reports
+ * more records than came back, the day is re-read one product at a time, which
+ * is the only slicing dimension this API offers that reliably shrinks a day
+ * below the response cap. A slice that still overflows is recorded as an
+ * incomplete read rather than silently dropped - an ingestion layer that cannot
+ * tell you what it missed is not observable.
+ */
+async function ingestDay(
+  env: Env,
+  day: string,
+  result: IngestResult,
+): Promise<void> {
+  const consume = async (products: readonly string[]) => {
+    const { hits, total, cached } = await fetchSlice(env, day, products);
+    result.pages_fetched++;
+    if (cached) result.cache_hits++;
+    result.rows_seen += hits.length;
+
+    const rows: NormalisedComplaint[] = [];
+    for (const h of hits) {
+      const n = normalise((h as { _source: never })._source);
+      if (n) rows.push(n);
+    }
+    const { upserted, skipped } = await upsertAll(env, rows);
+    result.rows_upserted += upserted;
+    result.rows_skipped += skipped;
+    return { returned: hits.length, total };
+  };
+
+  const whole = await consume(SCOPE.products);
+  if (whole.total <= whole.returned) return;
+
+  for (const product of SCOPE.products) {
+    if (result.pages_fetched >= INGEST.maxRequestsPerInvocation) break;
+    const slice = await consume([product]);
+    if (slice.total > slice.returned) {
+      result.incomplete.push(
+        `${day} ${product}: source reports ${slice.total}, response carried ${slice.returned}`,
+      );
+    }
+  }
+}
+
+/** Ingest a specific list of days. */
 export async function ingestDays(
   env: Env,
   days: string[],
@@ -157,31 +217,12 @@ export async function ingestDays(
     rows_seen: 0,
     rows_upserted: 0,
     rows_skipped: 0,
+    incomplete: [],
     status: "ok",
   };
 
   try {
-    for (const day of sorted) {
-      let offset = 0;
-      for (let page = 0; page < INGEST.maxPagesPerInvocation; page++) {
-        const { hits, cached } = await fetchPage(env, day, offset);
-        result.pages_fetched++;
-        if (cached) result.cache_hits++;
-        result.rows_seen += hits.length;
-
-        const rows: NormalisedComplaint[] = [];
-        for (const h of hits) {
-          const n = normalise((h as { _source: never })._source);
-          if (n) rows.push(n);
-        }
-        const { upserted, skipped } = await upsertAll(env, rows);
-        result.rows_upserted += upserted;
-        result.rows_skipped += skipped;
-
-        if (hits.length < INGEST.pageSize) break;
-        offset += INGEST.pageSize;
-      }
-    }
+    for (const day of sorted) await ingestDay(env, day, result);
   } catch (e) {
     result.status = "error";
     result.error = e instanceof Error ? e.message : String(e);
@@ -201,7 +242,10 @@ export async function ingestDays(
       result.rows_upserted,
       result.rows_skipped,
       result.status,
-      result.error ?? null,
+      result.error ??
+        (result.incomplete.length > 0
+          ? `incomplete reads: ${result.incomplete.join("; ")}`
+          : null),
     )
     .run();
 

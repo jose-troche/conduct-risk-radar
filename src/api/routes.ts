@@ -14,7 +14,7 @@ import type { AlertRow, Env } from "../types";
 import { badRequest, json, newId, notFound } from "../lib/http";
 import { addDays, nowIso, today } from "../lib/time";
 import { cronIngest, ingestDays, parseDaysParam } from "../ingest/run";
-import { runDetection } from "../detect/run";
+import { runDetection, previewDetection } from "../detect/run";
 import { enrichAlert, getVariant, loadAlert } from "../enrich/run";
 import { variantAvailable } from "../enrich/providers";
 import { runEval } from "../evaluation/run";
@@ -352,6 +352,17 @@ LIMIT ?${binds.length}`;
 
   if (path === "/api/admin/detect" && method === "POST") {
     if (!authorised(request, env)) return json({ error: "unauthorised" }, { status: 401 });
+    // preview scores every cell and writes nothing, so thresholds can be set
+    // against the real distribution instead of a guess about it.
+    if (url.searchParams.get("preview") === "1") {
+      return json(
+        await previewDetection(
+          env,
+          url.searchParams.get("as_of"),
+          Number(url.searchParams.get("top") ?? 25),
+        ),
+      );
+    }
     return json(await runDetection(env, url.searchParams.get("as_of")));
   }
 

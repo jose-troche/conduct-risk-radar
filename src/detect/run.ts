@@ -1,6 +1,6 @@
 import { DETECTION, ENRICH, WEIGHTS_VERSION } from "../config";
 import type { Env } from "../types";
-import { addDays, daysBetween, nowIso } from "../lib/time";
+import { addDays, daysBetween, nowIso, today } from "../lib/time";
 import { newId } from "../lib/http";
 import { round } from "../lib/stats";
 import {
@@ -15,6 +15,7 @@ import {
   type CellAgg,
 } from "./queries";
 import { computeSignals, scoreCell, type CellContext } from "./signals";
+import type { SignalDetail } from "../types";
 
 export interface DetectionResult {
   run_id: string;
@@ -39,10 +40,15 @@ interface Windows {
 }
 
 /**
- * The detection window ends the day after the most recent complaint on file,
- * not "today": if ingestion is behind, anchoring to the wall clock would
- * silently compare a partially-filled window against a complete baseline and
- * read the gap as a collapse in volume.
+ * Where the detection window sits.
+ *
+ * Not "today", and not the newest complaint on file either. Both of those put
+ * the window inside data the CFPB has not finished publishing, which reads as a
+ * collapse in volume, a drift in the response mix, and an evidence packet with
+ * no narratives in it. The window therefore ends publicationLagDays before
+ * today - see the maturity table on that constant - and is additionally capped
+ * at the newest complaint on file so that a database still backfilling cannot
+ * be measured against a window it has no rows for.
  */
 export async function resolveWindows(
   env: Env,
@@ -54,7 +60,9 @@ export async function resolveWindows(
       `SELECT MAX(date_received) AS d FROM complaints`,
     ).first<{ d: string | null }>();
     if (!row?.d) return null;
-    end = addDays(row.d, 1);
+    const matured = addDays(today(), -DETECTION.publicationLagDays);
+    const newest = addDays(row.d, 1);
+    end = matured < newest ? matured : newest;
   }
   const windowStart = addDays(end, -DETECTION.detectionWindowDays);
   return {
@@ -73,6 +81,52 @@ function index<T>(rows: T[], key: keyof T): Map<string, T> {
   const m = new Map<string, T>();
   for (const r of rows) m.set(String(r[key]), r);
   return m;
+}
+
+export interface PreviewCell {
+  cell_key: string;
+  company: string;
+  product: string;
+  issue: string;
+  window_n: number;
+  baseline_n: number;
+  score: number;
+  dominant: string;
+  signals: unknown[];
+}
+
+/**
+ * Score every cell and return the ranking without writing anything.
+ *
+ * Thresholds and saturation points are judgement calls, and a judgement call
+ * made without looking at the distribution it applies to is a guess. This is
+ * how that distribution gets inspected.
+ */
+export async function previewDetection(
+  env: Env,
+  asOf?: string | null,
+  top = 25,
+): Promise<{ windows: Windows | null; cells_scored: number; cells: PreviewCell[] }> {
+  const out = await scoreAllCells(env, asOf);
+  if (!out) return { windows: null, cells_scored: 0, cells: [] };
+  return {
+    windows: out.w,
+    cells_scored: out.candidates.length,
+    cells: out.candidates
+      .sort((a: Candidate, b: Candidate) => b.score - a.score)
+      .slice(0, top)
+      .map((c: Candidate) => ({
+        cell_key: c.cell.cell_key,
+        company: c.cell.company,
+        product: c.cell.product,
+        issue: c.cell.issue,
+        window_n: c.cell.n,
+        baseline_n: c.baseline.n,
+        score: c.score,
+        dominant: c.dominant,
+        signals: c.signals,
+      })),
+  };
 }
 
 export async function runDetection(
@@ -120,134 +174,22 @@ export async function runDetection(
     status: "ok",
   };
 
+
   try {
-    // One batch, twelve aggregates. D1 does all the work; the Worker only ever
-    // sees a few hundred pre-aggregated rows.
-    const wArgs = [w.windowStart, w.windowEnd] as const;
-    const bArgs = [w.baselineStart, w.baselineEnd] as const;
-    const res = await env.DB.batch([
-      env.DB.prepare(Q_CELL_AGG).bind(...wArgs, DETECTION.minWindowVolume),
-      env.DB.prepare(Q_CELL_AGG).bind(...bArgs, DETECTION.minBaselineVolume),
-      env.DB.prepare(Q_MEDIAN_RESPONSE).bind(...wArgs),
-      env.DB.prepare(Q_MEDIAN_RESPONSE).bind(...bArgs),
-      env.DB.prepare(Q_TOP_STATE).bind(...wArgs),
-      env.DB.prepare(Q_STATE_SHARES).bind(...bArgs),
-      env.DB.prepare(Q_COMPANY_TOTALS).bind(...wArgs),
-      env.DB.prepare(Q_COMPANY_TOTALS).bind(...bArgs),
-      env.DB.prepare(Q_MARKET_ISSUE).bind(...wArgs),
-      env.DB.prepare(Q_MARKET_ISSUE).bind(...bArgs),
-      env.DB.prepare(Q_RESPONSE_MIX).bind(...wArgs),
-    ]);
-
-    const wCells = res[0].results as unknown as CellAgg[];
-    const bCells = index(res[1].results as unknown as CellAgg[], "cell_key");
-    const wMedian = index(res[2].results as Row[], "cell_key");
-    const bMedian = index(res[3].results as Row[], "cell_key");
-    const wTopState = index(res[4].results as Row[], "cell_key");
-
-    const bStateShare = new Map<string, number>();
-    for (const r of res[5].results as Row[]) {
-      bStateShare.set(
-        `${r.cell_key}|${r.state}`,
-        Number(r.c) / Math.max(1, Number(r.total)),
-      );
-    }
-
-    const companyTotalsW = index(res[6].results as Row[], "company");
-    const companyTotalsB = index(res[7].results as Row[], "company");
-
-    const marketW = new Map<string, number>();
-    let marketTotalW = 0;
-    for (const r of res[8].results as Row[]) {
-      marketW.set(`${r.product}|${r.issue}`, Number(r.n));
-      marketTotalW += Number(r.n);
-    }
-    const marketB = new Map<string, number>();
-    let marketTotalB = 0;
-    for (const r of res[9].results as Row[]) {
-      marketB.set(`${r.product}|${r.issue}`, Number(r.n));
-      marketTotalB += Number(r.n);
-    }
-
-    const mixByCell = new Map<string, Record<string, number>>();
-    for (const r of res[10].results as Row[]) {
-      const k = String(r.cell_key);
-      const m = mixByCell.get(k) ?? {};
-      m[String(r.response ?? "unknown")] = Number(r.c);
-      mixByCell.set(k, m);
-    }
-
-    const windowDays = daysBetween(w.windowStart, w.windowEnd);
-    const baselineDays = daysBetween(w.baselineStart, w.baselineEnd);
-
-    interface Candidate {
-      cell: CellAgg;
-      baseline: CellAgg;
-      score: number;
-      dominant: string;
-      signals: unknown[];
-      ctx: CellContext;
-    }
-    const candidates: Candidate[] = [];
-
-    for (const cell of wCells) {
-      result.cells_examined++;
-      const baseline = bCells.get(cell.cell_key);
-      // Cells below the minimum baseline volume are excluded, not scored. A
-      // cell moving from 1 complaint to 4 carries a huge z-score and no
-      // information whatsoever.
-      if (!baseline || baseline.n < DETECTION.minBaselineVolume) continue;
-      result.cells_scored++;
-
-      const topStateRow = wTopState.get(cell.cell_key);
-      const topState = topStateRow
-        ? {
-            state: String(topStateRow.state),
-            share: Number(topStateRow.c) / Math.max(1, Number(topStateRow.total)),
-          }
-        : null;
-
-      const compW = Number(companyTotalsW.get(cell.company)?.n ?? 0);
-      const compB = Number(companyTotalsB.get(cell.company)?.n ?? 0);
-      const piKey = `${cell.product}|${cell.issue}`;
-
-      const ctx: CellContext = {
-        windowDays,
-        baselineDays,
-        window: cell,
-        baseline,
-        windowMedianResponse:
-          wMedian.get(cell.cell_key)?.median_response_days != null
-            ? Number(wMedian.get(cell.cell_key)!.median_response_days)
-            : null,
-        baselineMedianResponse:
-          bMedian.get(cell.cell_key)?.median_response_days != null
-            ? Number(bMedian.get(cell.cell_key)!.median_response_days)
-            : null,
-        windowTopState: topState,
-        baselineStateShare: topState
-          ? (bStateShare.get(`${cell.cell_key}|${topState.state}`) ?? null)
-          : null,
-        windowIssueShare: compW > 0 ? cell.n / compW : 0,
-        baselineIssueShare: compB > 0 ? baseline.n / compB : 0,
-        windowMarketShare:
-          marketTotalW > 0 ? (marketW.get(piKey) ?? 0) / marketTotalW : 0,
-        baselineMarketShare:
-          marketTotalB > 0 ? (marketB.get(piKey) ?? 0) / marketTotalB : 0,
-      };
-
-      const signals = computeSignals(ctx);
-      const scored = scoreCell(signals);
-      if (scored.score < DETECTION.alertThreshold) continue;
-      candidates.push({
-        cell,
-        baseline,
-        score: scored.score,
-        dominant: scored.dominant,
-        signals: scored.signals,
-        ctx,
-      });
-    }
+    const out = await scoreAllCells(env, asOf);
+    if (!out) throw new Error("no complaints ingested");
+    const {
+      candidates: allCells,
+      bCells,
+      bMedian,
+      mixByCell,
+      companyTotalsB,
+      marketB,
+      marketTotalB,
+    } = out;
+    result.cells_examined = out.examined;
+    result.cells_scored = allCells.length;
+    const candidates = allCells.filter((c) => c.score >= DETECTION.alertThreshold);
 
     // Persist the baselines the run used, so an alert's score is reconstructible
     // later without recomputing anything.
@@ -434,4 +376,169 @@ ON CONFLICT(cell_key, window_start, window_end) DO UPDATE SET
       }),
     );
   }
+}
+
+interface Candidate {
+  cell: CellAgg;
+  baseline: CellAgg;
+  score: number;
+  dominant: string;
+  signals: SignalDetail[];
+  ctx: CellContext;
+}
+
+interface ScoredRun {
+  w: Windows;
+  examined: number;
+  candidates: Candidate[];
+  bCells: Map<string, CellAgg>;
+  bMedian: Map<string, Record<string, unknown>>;
+  mixByCell: Map<string, Record<string, number>>;
+  companyTotalsB: Map<string, Record<string, unknown>>;
+  marketB: Map<string, number>;
+  marketTotalB: number;
+}
+
+/**
+ * Aggregate, then score every cell that clears the volume floors. Returns the
+ * full ranking with no threshold applied, so the same code path serves both a
+ * real detection run and a dry-run preview of the score distribution.
+ */
+async function scoreAllCells(env: Env, asOf?: string | null): Promise<ScoredRun | null> {
+  const w = await resolveWindows(env, asOf);
+  if (!w) return null;
+  let examined = 0;
+  let scored_count = 0;
+
+  // One batch, twelve aggregates. D1 does all the work; the Worker only ever
+  // sees a few hundred pre-aggregated rows.
+  const wArgs = [w.windowStart, w.windowEnd] as const;
+  const bArgs = [w.baselineStart, w.baselineEnd] as const;
+  const res = await env.DB.batch([
+    env.DB.prepare(Q_CELL_AGG).bind(...wArgs, DETECTION.minWindowVolume),
+    env.DB.prepare(Q_CELL_AGG).bind(...bArgs, DETECTION.minBaselineVolume),
+    env.DB.prepare(Q_MEDIAN_RESPONSE).bind(...wArgs),
+    env.DB.prepare(Q_MEDIAN_RESPONSE).bind(...bArgs),
+    env.DB.prepare(Q_TOP_STATE).bind(...wArgs),
+    env.DB.prepare(Q_STATE_SHARES).bind(...bArgs),
+    env.DB.prepare(Q_COMPANY_TOTALS).bind(...wArgs),
+    env.DB.prepare(Q_COMPANY_TOTALS).bind(...bArgs),
+    env.DB.prepare(Q_MARKET_ISSUE).bind(...wArgs),
+    env.DB.prepare(Q_MARKET_ISSUE).bind(...bArgs),
+    env.DB.prepare(Q_RESPONSE_MIX).bind(...wArgs),
+  ]);
+
+  const wCells = res[0].results as unknown as CellAgg[];
+  const bCells = index(res[1].results as unknown as CellAgg[], "cell_key");
+  const wMedian = index(res[2].results as Row[], "cell_key");
+  const bMedian = index(res[3].results as Row[], "cell_key");
+  const wTopState = index(res[4].results as Row[], "cell_key");
+
+  const bStateShare = new Map<string, number>();
+  for (const r of res[5].results as Row[]) {
+    bStateShare.set(
+      `${r.cell_key}|${r.state}`,
+      Number(r.c) / Math.max(1, Number(r.total)),
+    );
+  }
+
+  const companyTotalsW = index(res[6].results as Row[], "company");
+  const companyTotalsB = index(res[7].results as Row[], "company");
+
+  const marketW = new Map<string, number>();
+  let marketTotalW = 0;
+  for (const r of res[8].results as Row[]) {
+    marketW.set(`${r.product}|${r.issue}`, Number(r.n));
+    marketTotalW += Number(r.n);
+  }
+  const marketB = new Map<string, number>();
+  let marketTotalB = 0;
+  for (const r of res[9].results as Row[]) {
+    marketB.set(`${r.product}|${r.issue}`, Number(r.n));
+    marketTotalB += Number(r.n);
+  }
+
+  const mixByCell = new Map<string, Record<string, number>>();
+  for (const r of res[10].results as Row[]) {
+    const k = String(r.cell_key);
+    const m = mixByCell.get(k) ?? {};
+    m[String(r.response ?? "unknown")] = Number(r.c);
+    mixByCell.set(k, m);
+  }
+
+  const windowDays = daysBetween(w.windowStart, w.windowEnd);
+  const baselineDays = daysBetween(w.baselineStart, w.baselineEnd);
+
+  const candidates: Candidate[] = [];
+
+  for (const cell of wCells) {
+    examined++;
+    const baseline = bCells.get(cell.cell_key);
+    // Cells below the minimum baseline volume are excluded, not scored. A
+    // cell moving from 1 complaint to 4 carries a huge z-score and no
+    // information whatsoever.
+    if (!baseline || baseline.n < DETECTION.minBaselineVolume) continue;
+    scored_count++;
+
+    const topStateRow = wTopState.get(cell.cell_key);
+    const topState = topStateRow
+      ? {
+          state: String(topStateRow.state),
+          share: Number(topStateRow.c) / Math.max(1, Number(topStateRow.total)),
+        }
+      : null;
+
+    const compW = Number(companyTotalsW.get(cell.company)?.n ?? 0);
+    const compB = Number(companyTotalsB.get(cell.company)?.n ?? 0);
+    const piKey = `${cell.product}|${cell.issue}`;
+
+    const ctx: CellContext = {
+      windowDays,
+      baselineDays,
+      window: cell,
+      baseline,
+      windowMedianResponse:
+        wMedian.get(cell.cell_key)?.median_response_days != null
+          ? Number(wMedian.get(cell.cell_key)!.median_response_days)
+          : null,
+      baselineMedianResponse:
+        bMedian.get(cell.cell_key)?.median_response_days != null
+          ? Number(bMedian.get(cell.cell_key)!.median_response_days)
+          : null,
+      windowTopState: topState,
+      baselineStateShare: topState
+        ? (bStateShare.get(`${cell.cell_key}|${topState.state}`) ?? null)
+        : null,
+      windowIssueShare: compW > 0 ? cell.n / compW : 0,
+      baselineIssueShare: compB > 0 ? baseline.n / compB : 0,
+      windowMarketShare:
+        marketTotalW > 0 ? (marketW.get(piKey) ?? 0) / marketTotalW : 0,
+      baselineMarketShare:
+        marketTotalB > 0 ? (marketB.get(piKey) ?? 0) / marketTotalB : 0,
+    };
+
+    const signals = computeSignals(ctx);
+    const scored = scoreCell(signals);
+    candidates.push({
+      cell,
+      baseline,
+      score: scored.score,
+      dominant: scored.dominant,
+      signals: scored.signals,
+      ctx,
+    });
+  }
+
+
+  return {
+    w,
+    examined,
+    candidates,
+    bCells,
+    bMedian,
+    mixByCell,
+    companyTotalsB,
+    marketB,
+    marketTotalB,
+  };
 }

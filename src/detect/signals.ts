@@ -64,7 +64,7 @@ export function computeSignals(ctx: CellContext): SignalDetail[] {
   const windowRate = ctx.window.n / ctx.windowDays;
 
   // --- Volume anomaly -------------------------------------------------------
-  const z = zScore(windowRate, b.mean, b.stddev);
+  const z = zScore(windowRate, b.mean, b.stddev, ctx.windowDays);
   out.push(
     detail(
       "volume_anomaly",
@@ -76,8 +76,22 @@ export function computeSignals(ctx: CellContext): SignalDetail[] {
   );
 
   // --- Response-time degradation -------------------------------------------
+  //
+  // The spec asks for a median, and the median is what is reported. But the
+  // CFPB routes 93.6% of complaints to the company on the day it receives them,
+  // so the median days-to-company is 0 in almost every cell, in almost every
+  // window - a median of 0 against a baseline of 0 is inert, and this signal
+  // spent its whole weight contributing nothing.
+  //
+  // The tail is where the movement actually is, so when both medians are zero
+  // the comparison falls back to the mean, which does move. The reported values
+  // say which statistic was used, because a signal that quietly switched
+  // definitions would be worse than one that did nothing.
   const wm = ctx.windowMedianResponse;
   const bm = ctx.baselineMedianResponse;
+  const wMean = ctx.window.rd_n > 0 ? ctx.window.rd_sum / ctx.window.rd_n : null;
+  const bMean = ctx.baseline.rd_n > 0 ? ctx.baseline.rd_sum / ctx.baseline.rd_n : null;
+
   if (wm === null || bm === null) {
     out.push(
       detail(
@@ -86,7 +100,19 @@ export function computeSignals(ctx: CellContext): SignalDetail[] {
         wm === null ? "no data" : `${round(wm, 1)}d`,
         bm === null ? "no data" : `${round(bm, 1)}d`,
         0,
-        "No dates sent to company in one of the periods.",
+        "No dates sent to company recorded in one of the periods.",
+      ),
+    );
+  } else if (wm === 0 && bm === 0 && wMean !== null && bMean !== null) {
+    const ratio = (wMean - bMean) / Math.max(bMean, 0.05);
+    out.push(
+      detail(
+        "response_time_degradation",
+        ratio,
+        `${round(wMean, 2)}d mean`,
+        `${round(bMean, 2)}d mean`,
+        normalise(ratio, SATURATION.response_time_ratio),
+        "Median is 0 in both periods - this source routes same-day - so the mean is compared instead.",
       ),
     );
   } else {
@@ -111,7 +137,10 @@ export function computeSignals(ctx: CellContext): SignalDetail[] {
   // age of the data.
   const wShareDen = ctx.window.n_settled;
   const bShareDen = ctx.baseline.n_settled;
-  if (wShareDen < DETECTION.minWindowVolume || bShareDen < DETECTION.minBaselineVolume) {
+  if (
+    wShareDen < DETECTION.minShareDenominator ||
+    bShareDen < DETECTION.minShareDenominator
+  ) {
     out.push(
       detail(
         "timeliness_drift",
@@ -138,7 +167,10 @@ export function computeSignals(ctx: CellContext): SignalDetail[] {
   }
 
   // --- Response-mix drift ---------------------------------------------------
-  if (wShareDen < DETECTION.minWindowVolume || bShareDen < DETECTION.minBaselineVolume) {
+  if (
+    wShareDen < DETECTION.minShareDenominator ||
+    bShareDen < DETECTION.minShareDenominator
+  ) {
     out.push(
       detail(
         "response_mix_drift",

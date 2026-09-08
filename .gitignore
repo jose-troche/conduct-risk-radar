@@ -4,3 +4,4 @@ ui/dist/
 .dev.vars
 .DS_Store
 *.log
+.admin-token

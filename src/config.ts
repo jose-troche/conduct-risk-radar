@@ -24,6 +24,10 @@ export const SCOPE = {
     "Checking or savings account",
     "Money transfer, virtual currency, or money service",
     "Prepaid card",
+    "Mortgage",
+    "Vehicle loan or lease",
+    "Student loan",
+    "Payday loan, title loan, personal loan, or advance loan",
   ],
   companies: [
     "CAPITAL ONE FINANCIAL CORPORATION",
@@ -34,28 +38,52 @@ export const SCOPE = {
     "SYNCHRONY FINANCIAL",
     "Block, Inc.",
     "Paypal Holdings, Inc",
+    "Chime Financial Inc",
     "U.S. BANCORP",
     "TRUIST FINANCIAL CORPORATION",
     "AMERICAN EXPRESS COMPANY",
     "DISCOVER BANK",
     "ALLY FINANCIAL INC.",
     "NAVY FEDERAL CREDIT UNION",
+    "GOLDMAN SACHS BANK USA",
+    "Bread Financial Holdings, Inc.",
+    "TD BANK US HOLDING COMPANY",
+    "PNC Bank N.A.",
+    "BARCLAYS BANK DELAWARE",
+    "SOFI TECHNOLOGIES, INC.",
+    "SANTANDER HOLDINGS USA, INC.",
+    "Rocket Mortgage, LLC",
+    "MOHELA",
+    "Nelnet, Inc.",
+    "Affirm Holdings, Inc",
   ],
-  /** Rolling window, in days, that the system keeps ingested. */
-  windowDays: 90,
+  /**
+   * Rolling window, in days, that the system keeps ingested.
+   *
+   * Long enough to hold the detection window, its 60-day baseline, AND the
+   * publication lag documented on DETECTION.publicationLagDays. 160 days is
+   * roughly 100k rows at ~120 MB, comfortably inside D1's 500 MB free tier.
+   */
+  windowDays: 160,
 } as const;
 
 export const INGEST = {
   apiBase:
     "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/",
   /**
-   * Records per API page. Deliberately small: the Workers free tier allows 10ms
-   * of CPU per invocation, and JSON.parse of a full 1000-record page alone can
-   * exceed that. 250 keeps parse + bind comfortably inside the budget.
+   * Records per request.
+   *
+   * The CFPB search API ignores an offset parameter entirely - it paginates via
+   * opaque break-points in the response _meta, not via frm/from - so the only
+   * reliable way to read a slice whole is to ask for more records than it
+   * contains. A day of the scope runs around 360 complaints and peaks near 550,
+   * so 1000 reads a day in one request with room to spare, and the ingester
+   * verifies the returned count against the reported total rather than assuming
+   * it fitted.
    */
-  pageSize: 250,
-  /** Hard stop on pages per invocation, well under the free-tier 50 subrequests. */
-  maxPagesPerInvocation: 8,
+  pageSize: 1000,
+  /** Hard stop on requests per invocation, well under the free-tier 50 subrequests. */
+  maxRequestsPerInvocation: 8,
   /**
    * KV TTLs for raw API pages.
    *
@@ -77,6 +105,39 @@ export const INGEST = {
 } as const;
 
 export const DETECTION = {
+  /**
+   * How far back the detection window ends, in days before today.
+   *
+   * This is the single most consequential number in the system, and it is not a
+   * guess. The CFPB publishes a complaint long before that complaint's record
+   * is complete, and the three things detection depends on mature at three
+   * different rates. Measured over the ingested scope:
+   *
+   *   weeks ago   complaints/day   settled %   with narrative %
+   *      0              18            23             0
+   *      1             126            63             0
+   *      2             429            53             0
+   *      4             383            72             0
+   *      6             408            83            10
+   *      8             416            96            24
+   *     10             417            99            42
+   *     12             256           100            45
+   *
+   * Volume is complete after about two weeks. Company responses settle after
+   * about eight. Narratives - which only exist where the consumer consented to
+   * publication - do not reach their plateau until about ten weeks.
+   *
+   * Running detection on fresh data would therefore read the publication lag as
+   * a collapse in volume, read half-settled complaints as a drift in the
+   * response mix, and hand the model an evidence packet with no narratives in
+   * it at all. All three were observed before this constant existed.
+   *
+   * So the system is retrospective by construction: it analyses a window that
+   * ended ten weeks ago, because that is when the data is actually there. The
+   * cost is stated plainly rather than hidden - this is not a near-real-time
+   * monitor, and it cannot be one on this source.
+   */
+  publicationLagDays: 70,
   /** Length of the window being tested for an anomaly. */
   detectionWindowDays: 14,
   /** Trailing baseline, ending where the detection window begins. */
@@ -87,7 +148,15 @@ export const DETECTION = {
    */
   minBaselineVolume: 20,
   /** A cell must also have this many complaints in the detection window. */
-  minWindowVolume: 5,
+  minWindowVolume: 15,
+  /**
+   * Share-based signals (timeliness, response mix) need their own floor, and it
+   * has to be higher than a bare volume floor. A cell with six settled
+   * complaints can read 100% closed-without-relief and saturate the signal on
+   * what is really one or two extra cases. Small-n wrecks a proportion faster
+   * than it wrecks a count.
+   */
+  minShareDenominator: 20,
   /** Alerts below this score are not persisted. */
   alertThreshold: 35,
   /** Enrichment only runs at or above this score. */
@@ -147,24 +216,41 @@ export const WEIGHTS: Record<SignalType, number> = {
 };
 
 /**
- * Saturation points for normalising each raw signal onto 0–100. A raw value at
- * or beyond the saturation point scores 100. These are judgement calls about
- * what "as bad as it gets" looks like, and are as much a design choice as the
- * weights.
+ * Saturation points for normalising each raw signal onto 0-100. A raw value at
+ * or beyond the saturation point scores 100.
+ *
+ * These are calibrated, not invented: each is set near the 95th percentile of
+ * that signal's observed positive values across all scored cells, so a signal
+ * sitting at its historical extreme scores near 100 and the 0-100 range is
+ * actually used. Measured over the ingested scope (92 cells, 14-day window
+ * against a 60-day baseline):
+ *
+ *   signal                      cells > 0    p50     p90     p95     max
+ *   volume_anomaly (z)              50       1.07    2.57    3.29    3.64
+ *   timeliness_drift (pp)            5       0.021   0.144   0.144   0.144
+ *   response_mix_drift (pp)         34       0.057   0.125   0.174   0.202
+ *   geo_concentration (pp)          74       0.062   0.171   0.185   0.267
+ *   emerging_issue (pp)             54       0.008   0.021   0.038   0.193
+ *
+ * Calibrating to the data is still a design choice, not a fitted result -
+ * nothing here was optimised against an outcome, because there is no outcome
+ * label in this data to optimise against. It just means the scale matches the
+ * distribution it has to rank, rather than compressing every real anomaly into
+ * the bottom fifth of the range, which is what the first uncalibrated pass did.
  */
 export const SATURATION = {
-  /** z-score of the window's daily rate against the baseline. */
-  volume_z: 4,
-  /** Proportional increase in median days-to-company. 1.0 = a doubling. */
+  /** Standard errors between the window's daily rate and the baseline's. */
+  volume_z: 3.5,
+  /** Proportional increase in days-to-company. 1.0 = a doubling. */
   response_time_ratio: 1.0,
-  /** Percentage-point rise in the untimely share. */
-  untimely_pp: 0.2,
+  /** Percentage-point rise in the untimely share. Untimely is rare: 0.5% base. */
+  untimely_pp: 0.1,
   /** Percentage-point rise in the share closed without relief. */
-  adverse_pp: 0.2,
+  adverse_pp: 0.18,
   /** Percentage-point rise in the top state's share of the cell. */
-  geo_pp: 0.25,
+  geo_pp: 0.2,
   /** Percentage-point rise in issue share, in excess of the market-wide move. */
-  emerging_pp: 0.15,
+  emerging_pp: 0.06,
 } as const;
 
 export const SIGNAL_LABELS: Record<SignalType, string> = {

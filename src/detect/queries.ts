@@ -18,6 +18,8 @@ export interface CellAgg {
   n_settled: number;
   n_untimely: number;
   n_adverse: number;
+  rd_sum: number;
+  rd_n: number;
 }
 
 /**
@@ -39,7 +41,9 @@ SELECT cell_key,
        SUM(nn)       AS n_narrative,
        SUM(ns)       AS n_settled,
        SUM(nu)       AS n_untimely,
-       SUM(na)       AS n_adverse
+       SUM(na)       AS n_adverse,
+       SUM(rds)      AS rd_sum,
+       SUM(rdn)      AS rd_n
 FROM (
   SELECT cell_key,
          MAX(company) AS company,
@@ -49,7 +53,9 @@ FROM (
          SUM(has_narrative) AS nn,
          SUM(settled)       AS ns,
          SUM(CASE WHEN settled = 1 AND timely_response = 0 THEN 1 ELSE 0 END) AS nu,
-         SUM(CASE WHEN settled = 1 AND adverse = 1 THEN 1 ELSE 0 END)         AS na
+         SUM(CASE WHEN settled = 1 AND adverse = 1 THEN 1 ELSE 0 END)         AS na,
+         SUM(COALESCE(response_days, 0))                                      AS rds,
+         SUM(CASE WHEN response_days IS NOT NULL THEN 1 ELSE 0 END)           AS rdn
   FROM complaints
   WHERE date_received >= ?1 AND date_received < ?2
   GROUP BY cell_key, date_received
