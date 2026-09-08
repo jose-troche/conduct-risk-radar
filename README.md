@@ -191,6 +191,84 @@ POST /api/admin/enrich-one               (token-gated)
 
 ---
 
+## Labels, and what the agreement number is allowed to mean
+
+Dispositions are the labelled set, and the spec is explicit that they are a
+**human's** triage judgements. Agreement is agreement with one reviewer.
+
+Two kinds of label can exist here, and the system keeps them apart structurally
+rather than by convention:
+
+- **Human labels**, captured through the queue. The UI locks the analyst's
+  severity before it will request the model's proposal, and the API refuses to
+  send the proposal without `reveal=1`, so these are unanchored by construction.
+- **Seed labels**, written by [`scripts/seed-labels.mjs`](scripts/seed-labels.mjs)
+  from a stated rubric. They exist so the eval, the per-segment breakdown and the
+  ship gate can be exercised end to end before anyone has sat in the queue.
+
+**A seed label is not a judgement.** The rubric is applied mechanically to the
+same computed signals the model is shown, so an agreement number measured
+against it tells you whether the model reproduces a rubric. That is a smoke test
+of the machinery and it is not a result.
+
+Every reviewer id beginning with `seed-` is flagged as such in
+[`src/config.ts`](src/config.ts). The eval filters by reviewer, every run records
+who produced its labels, and the UI shows a banner on any run containing seed
+labels. Run yours scoped to yourself:
+
+```bash
+curl -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"analyst_id":"your-name"}' https://<worker>/api/eval/runs
+```
+
+---
+
+## Current state
+
+Layers 1-4 are built, deployed and verified against live data. Layer 5 is built
+and unexercised: it needs a label set, and the D1 free-tier daily read and write
+budgets were exhausted producing everything above. They reset at midnight UTC.
+
+Verified:
+
+| | |
+|---|---|
+| Complaints ingested | 86,186 over 160 days, 8 products, 25 institutions |
+| Idempotency | a full 160-day re-run reported `28,274 upserted · 31,179 unchanged` |
+| Cells scored | 128 |
+| Alerts raised, model off | 36 |
+| Score reconstructible | yes - stored contributions sum exactly to the stored score |
+| Enrichments run | 26, of which 19 passed the validation gate |
+| Citation validation failure rate | 26.9% (before the three fixes below) |
+| Cost per enrichment | $0.00193 on Workers AI |
+| Latency | p50 7.4s, p95 12.8s |
+| Tests | 44 |
+
+The 26.9% figure is pre-fix and should improve: three of those failures were
+defects on our side rather than the model's - the prompt's citation example
+contained a real complaint id which the model dutifully cited, the sentence
+splitter broke on `U.S.` and `CO.` and marked well-cited sentences as uncited,
+and a non-string response from Workers AI threw before the enrichment could be
+recorded. All three are fixed and covered by tests; the rate has not been
+re-measured because the quota ran out first.
+
+One behaviour worth flagging before any eval is run: **every one of the 19
+passing enrichments proposed `medium`.** A variant that always answers `medium`
+scores agreement equal to the base rate of `medium` in the labels, which is
+exactly the kind of result the per-segment gate exists to catch.
+
+### Finishing the run
+
+```bash
+./scripts/finish.sh https://conduct-risk-radar.troche.workers.dev "$(cat .admin-token)"
+```
+
+Applies migration 0002 first so every subsequent write is cheaper, tops up the
+window, re-runs detection, enriches with both Workers AI variants, writes the
+seed label set, and runs the eval. Idempotent throughout.
+
+---
+
 ## Running it
 
 ```bash

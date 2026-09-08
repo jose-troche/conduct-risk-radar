@@ -356,5 +356,20 @@ export const EVAL_GATE = {
   minSegmentSize: 3,
 } as const;
 
+/**
+ * Analyst ids beginning with this prefix did not come from a person.
+ *
+ * Seed labels are produced by a stated rubric so the eval machinery can be
+ * exercised end to end before any human has sat in the queue. An agreement
+ * number computed against them measures whether the model reproduces a rubric
+ * - which is a smoke test, not a result - so anything that reports on a label
+ * set has to be able to say which labels were which.
+ */
+export const SEED_ANALYST_PREFIX = "seed-";
+
+export function isSeedAnalyst(analystId: string): boolean {
+  return analystId.startsWith(SEED_ANALYST_PREFIX);
+}
+
 export const SEVERITIES = ["low", "medium", "high"] as const;
 export type Severity = (typeof SEVERITIES)[number];

@@ -9,6 +9,7 @@ import {
   WEIGHTS_VERSION,
   DEFAULT_VARIANT_ID,
   SEVERITIES,
+  isSeedAnalyst,
 } from "../config";
 import type { AlertRow, Env } from "../types";
 import { badRequest, json, newId, notFound } from "../lib/http";
@@ -302,6 +303,7 @@ LIMIT ?${binds.length}`;
       variant_ids?: string[];
       label_set_version?: string;
       notes?: string;
+      analyst_id?: string;
     };
     const variantIds =
       body.variant_ids && body.variant_ids.length > 0
@@ -312,6 +314,7 @@ LIMIT ?${binds.length}`;
       variantIds,
       body.label_set_version ?? today(),
       body.notes ?? null,
+      body.analyst_id?.trim() || null,
     );
     return json(result);
   }
@@ -319,7 +322,8 @@ LIMIT ?${binds.length}`;
   if (path === "/api/eval/runs" && method === "GET") {
     const rows = await env.DB.prepare(
       `SELECT id, label_set_version, variant_ids_json, started_at, finished_at,
-              label_count, status, notes FROM eval_runs ORDER BY started_at DESC LIMIT 25`,
+              label_count, status, notes, analyst_filter, reviewers_json
+       FROM eval_runs ORDER BY started_at DESC LIMIT 25`,
     ).all();
     return json({ items: rows.results });
   }
@@ -328,12 +332,19 @@ LIMIT ?${binds.length}`;
   if (evalMatch && method === "GET") {
     const row = await env.DB.prepare(`SELECT * FROM eval_runs WHERE id = ?1`)
       .bind(evalMatch[1]!)
-      .first<{ results_json: string | null; gate_verdict_json: string | null }>();
+      .first<{
+        results_json: string | null;
+        gate_verdict_json: string | null;
+        reviewers_json: string | null;
+      }>();
     if (!row) return notFound("eval run not found");
+    const reviewers = row.reviewers_json ? JSON.parse(row.reviewers_json) : [];
     return json({
       ...row,
       results: row.results_json ? JSON.parse(row.results_json) : null,
       gate: row.gate_verdict_json ? JSON.parse(row.gate_verdict_json) : null,
+      reviewers,
+      contains_seed_labels: (reviewers as { is_seed: boolean }[]).some((r) => r.is_seed),
     });
   }
 
@@ -415,6 +426,9 @@ async function stats(env: Env) {
        FROM dispositions`,
     ),
     env.DB.prepare(
+      `SELECT analyst_id, COUNT(*) AS c FROM dispositions GROUP BY analyst_id`,
+    ),
+    env.DB.prepare(
       `SELECT validation_status, COUNT(*) AS c FROM enrichments GROUP BY validation_status`,
     ),
     env.DB.prepare(
@@ -438,9 +452,15 @@ async function stats(env: Env) {
   const alertStatus: Record<string, number> = {};
   for (const r of res[1].results as { status: string; c: number }[]) alertStatus[r.status] = r.c;
 
+  const reviewers = (res[3].results as { analyst_id: string; c: number }[]).map((r) => ({
+    analyst_id: r.analyst_id,
+    labels: r.c,
+    is_seed: isSeedAnalyst(r.analyst_id),
+  }));
+
   const validation: Record<string, number> = {};
   let enrichTotal = 0;
-  for (const r of res[3].results as { validation_status: string; c: number }[]) {
+  for (const r of res[4].results as { validation_status: string; c: number }[]) {
     validation[r.validation_status] = r.c;
     enrichTotal += r.c;
   }
@@ -459,7 +479,7 @@ async function stats(env: Env) {
       companies: Number(c.companies ?? 0),
       cells: Number(c.cells ?? 0),
       cells_above_floor: Number(
-        (res[6].results[0] as { scored_cells: number }).scored_cells ?? 0,
+        (res[7].results[0] as { scored_cells: number }).scored_cells ?? 0,
       ),
       window_days: SCOPE.windowDays,
       products: SCOPE.products,
@@ -478,13 +498,18 @@ async function stats(env: Env) {
     dispositions: {
       total: Number(disp?.dispositions ?? 0),
       severity_recorded_before_proposal: Number(disp?.unanchored ?? 0),
+      reviewers,
+      // Seed labels come from a stated rubric, not a person. Reported here so
+      // the coverage page can never imply a human sat in the queue when none did.
+      human_labels: reviewers.filter((r) => !r.is_seed).reduce((t, r) => t + r.labels, 0),
+      seed_labels: reviewers.filter((r) => r.is_seed).reduce((t, r) => t + r.labels, 0),
     },
     enrichments: {
       total: enrichTotal,
       by_validation_status: validation,
       validation_failure_rate: enrichTotal > 0 ? 1 - okCount / enrichTotal : null,
     },
-    ingest_runs: res[4].results,
-    detection_runs: res[5].results,
+    ingest_runs: res[5].results,
+    detection_runs: res[6].results,
   };
 }

@@ -126,10 +126,13 @@ export const api = {
     }),
   evalRuns: () => req<{ items: any[] }>("/api/eval/runs"),
   evalRun: (id: string) => req<any>(`/api/eval/runs/${id}`),
-  runEval: (variantIds: string[], token: string) =>
+  runEval: (variantIds: string[], token: string, analystId?: string) =>
     req<any>("/api/eval/runs", {
       method: "POST",
-      body: JSON.stringify({ variant_ids: variantIds }),
+      body: JSON.stringify({
+        variant_ids: variantIds,
+        ...(analystId ? { analyst_id: analystId } : {}),
+      }),
       headers: token ? { authorization: `Bearer ${token}` } : {},
     }),
 };

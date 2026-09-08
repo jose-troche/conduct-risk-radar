@@ -42,6 +42,15 @@ export function EvalView({ config, token }: { config: any; token: string }) {
   const [current, setCurrent] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewer, setReviewer] = useState("");
+  const [knownReviewers, setKnownReviewers] = useState<any[]>([]);
+
+  useEffect(() => {
+    api
+      .stats()
+      .then((s) => setKnownReviewers(s.dispositions?.reviewers ?? []))
+      .catch(() => {});
+  }, []);
 
   const loadRuns = () => api.evalRuns().then((r) => setRuns(r.items)).catch(() => {});
   useEffect(() => {
@@ -58,7 +67,7 @@ export function EvalView({ config, token }: { config: any; token: string }) {
     setError(null);
     try {
       const ids = (config?.variants ?? []).filter((v: any) => v.available).map((v: any) => v.id);
-      const r = await api.runEval(ids, token);
+      const r = await api.runEval(ids, token, reviewer || undefined);
       setCurrent({ ...r, results: r.variants, gate: r.gate });
       loadRuns();
     } catch (e) {
@@ -85,6 +94,14 @@ export function EvalView({ config, token }: { config: any; token: string }) {
           <button className="btn" onClick={run} disabled={busy}>
             {busy ? "Running…" : "Run evaluation on all available variants"}
           </button>
+          <select value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
+            <option value="">All reviewers</option>
+            {knownReviewers.map((r: any) => (
+              <option key={r.analyst_id} value={r.analyst_id}>
+                {r.analyst_id} ({r.labels}){r.is_seed ? " · rubric" : ""}
+              </option>
+            ))}
+          </select>
           {runs.length > 0 && (
             <select
               onChange={(e) => e.target.value && open(e.target.value)}
@@ -114,9 +131,24 @@ export function EvalView({ config, token }: { config: any; token: string }) {
 
       {current && (
         <div className="panel">
-          <h2>
-            Labels: {current.label_count ?? current.results?.[0]?.n ?? 0}
-          </h2>
+          <h2>Label set: {current.label_count ?? current.results?.[0]?.n ?? 0} labels</h2>
+          {(current.reviewers ?? []).length > 0 && (
+            <p className="small muted" style={{ marginTop: 0 }}>
+              Reviewers:{" "}
+              {(current.reviewers as any[])
+                .map((r) => `${r.analyst_id} (${r.labels}${r.is_seed ? ", rubric" : ""})`)
+                .join(" · ")}
+            </p>
+          )}
+          {current.contains_seed_labels && (
+            <div className="banner" style={{ marginBottom: 8 }}>
+              <strong>These are seed labels, not judgements.</strong> They were produced by a
+              stated rubric applied to the same computed signals the model sees, so the
+              agreement figures below measure whether the model reproduces a rubric. That is a
+              smoke test of the eval machinery, not a result. Capture dispositions through the
+              queue and re-run filtered to your own reviewer id before quoting any number.
+            </div>
+          )}
           {(current.label_count ?? 0) < 20 && (
             <p className="small" style={{ color: "var(--medium)" }}>
               Fewer than 20 labels. Every number below is directional at best.
