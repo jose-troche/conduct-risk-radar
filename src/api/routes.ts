@@ -131,16 +131,35 @@ LIMIT ?${binds.length}`;
         ).results
       : [];
 
-    const enrichments = (
-      await env.DB.prepare(
-        `SELECT id, variant_id, model, prompt_version, summary, proposed_severity,
-                reasoning, citations_json, signals_referenced_json, validation_status,
-                validation_detail, cost_usd, latency_ms, created_at
-         FROM enrichments WHERE alert_id = ?1 ORDER BY created_at DESC`,
-      )
-        .bind(alert.id)
-        .all()
-    ).results;
+    /**
+     * The model's proposal is withheld unless the caller explicitly asks to
+     * reveal it. This is the propose-then-reveal requirement enforced at the
+     * transport layer rather than by hiding a div: if the proposed severity
+     * never reaches the browser before the analyst commits, the agreement
+     * number cannot be measuring anchoring. The UI asks for reveal=1 only
+     * after the analyst's own severity has been locked.
+     */
+    const reveal = url.searchParams.get("reveal") === "1";
+    const enrichments = reveal
+      ? (
+          await env.DB.prepare(
+            `SELECT id, variant_id, model, prompt_version, summary, proposed_severity,
+                    reasoning, citations_json, signals_referenced_json, validation_status,
+                    validation_detail, cost_usd, latency_ms, created_at
+             FROM enrichments WHERE alert_id = ?1 ORDER BY created_at DESC`,
+          )
+            .bind(alert.id)
+            .all()
+        ).results
+      : [];
+
+    // Whether a draft exists is not itself a spoiler, and the UI needs it to
+    // decide what to offer.
+    const enrichmentAvailable = await env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM enrichments WHERE alert_id = ?1`,
+    )
+      .bind(alert.id)
+      .first<{ c: number }>();
 
     const dispositions = (
       await env.DB.prepare(
@@ -156,6 +175,8 @@ LIMIT ?${binds.length}`;
       alert: shapeAlert(alert),
       drivers,
       enrichments,
+      enrichment_revealed: reveal,
+      enrichment_count: enrichmentAvailable?.c ?? 0,
       dispositions,
       /** Narrative coverage is partial by design; the UI must not bury it. */
       coverage: {
