@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "conduct-risk-radar",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+
+  // The React app is served by the same Worker as the API. run_worker_first
+  // keeps /api/* off the asset router, and single-page-application handling
+  // sends every other unmatched path to index.html for client-side routing.
+  "assets": {
+    "directory": "./ui/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crr-db",
+      "database_id": "c3936b34-4e6b-45d3-95a6-efb2e04c5471",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [{ "binding": "RAW_CACHE", "id": "f8a197b0bf1740ab8e3b3a4b5fa2ff9a" }],
+
+  "ai": { "binding": "AI" },
+
+  "durable_objects": {
+    "bindings": [{ "name": "ENRICH_BATCH", "class_name": "EnrichBatch" }]
+  },
+
+  // SQLite-backed Durable Objects are the only kind the free plan will create.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EnrichBatch"] }],
+
+  // Once daily. The CFPB refreshes the public database once a day, so a tighter
+  // schedule would spend quota re-reading data that has not moved.
+  "triggers": { "crons": ["17 9 * * *"] }
+}
