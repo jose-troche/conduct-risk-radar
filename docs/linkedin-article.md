@@ -10,6 +10,8 @@ So I built something to answer one deliberately small question: **out of everyth
 
 I called it Conduct Risk Radar. It runs on a free hosting tier and costs about a fifth of a cent per case it writes up. Here is what it does, how it works, and — more usefully — what it refuses to do.
 
+![Conduct Risk Radar — statistics find the anomaly, the model explains one that already exists, a person decides](architecture.png)
+
 ---
 
 ## The tempting answer, and why it's wrong

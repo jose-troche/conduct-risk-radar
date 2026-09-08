@@ -1,0 +1,206 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: #fff; }
+  body {
+    width: 1600px; height: 948px; padding: 56px 65px 44px;
+    background: #FCFCFD;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #0B1220; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { width: 1470px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: flex-end; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #E6E8EE; }
+  h1 { font-size: 34px; letter-spacing: -0.9px; font-weight: 650; }
+  .tagline { margin-top: 9px; font-size: 16.5px; color: #55617A; letter-spacing: -0.1px; }
+  .tagline b { color: #0B1220; font-weight: 600; }
+  .srcbox { text-align: right; font-size: 12.5px; color: #7C879E; line-height: 1.65; }
+  .srcbox b { color: #38445C; font-weight: 600; }
+
+  /* ---------- source strip ---------- */
+  .source { display: flex; align-items: center; gap: 12px; margin: 26px 0 14px; font-size: 13px; color: #55617A; }
+  .source .dot { width: 7px; height: 7px; border-radius: 50%; background: #94A2BC; }
+  .source b { color: #0B1220; font-weight: 600; }
+
+  /* ---------- stage row ---------- */
+  .row { display: flex; }
+  .card { width: 262px; border: 1px solid #E2E6EE; border-radius: 13px; background: #fff; overflow: hidden;
+          box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 6px 18px rgba(16,24,40,.045); display: flex; flex-direction: column; }
+  .card .top { height: 4px; }
+  .card .body { padding: 17px 17px 0; flex: 1; }
+  .num { font-size: 11px; font-weight: 700; letter-spacing: 1.3px; }
+  .name { font-size: 18.5px; font-weight: 650; letter-spacing: -0.4px; margin: 5px 0 9px; }
+  .lede { font-size: 13.5px; line-height: 1.5; color: #4A5670; letter-spacing: -0.05px; min-height: 60px; }
+  ul { list-style: none; margin-top: 13px; }
+  li { font-size: 12.5px; line-height: 1.48; color: #55617A; padding-left: 14px; position: relative; margin-bottom: 8px; letter-spacing: -0.05px; }
+  li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: #C3CBDA; }
+  li b { color: #0B1220; font-weight: 600; }
+  .store { margin: 13px 15px 14px; padding: 8px 11px; border-radius: 7px; background: #F4F6FA; border: 1px solid #E8ECF3;
+           font-size: 11.5px; font-weight: 600; color: #46536D; letter-spacing: 0.1px; font-variant-numeric: tabular-nums; }
+  .store span { color: #8B97AE; font-weight: 500; }
+
+  .arrow { width: 40px; display: flex; align-items: center; justify-content: center; }
+
+  /* accents */
+  .det .top { background: #2F62E8; } .det .num { color: #2F62E8; }
+  .ai  .top { background: #7B4BE0; } .ai  .num { color: #7B4BE0; }
+  .hum .top { background: #0E9F6E; } .hum .num { color: #0E9F6E; }
+  .ai { border-color: #DCD1F7; box-shadow: 0 1px 2px rgba(74,32,150,.05), 0 6px 20px rgba(74,32,150,.09); }
+
+  .flag { margin: 0 15px 14px; padding: 8px 11px; border-radius: 7px; font-size: 11.5px; font-weight: 600; letter-spacing: -0.05px; }
+  .flag.v { background: #F6F2FE; border: 1px solid #E4D9FA; color: #6335CE; }
+
+  /* ---------- bands ---------- */
+  .bands { display: flex; margin-top: 16px; }
+  .band { height: 44px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+          font-size: 12.5px; font-weight: 650; letter-spacing: 0.1px; }
+  .band.det { width: 564px; background: #EEF3FE; border: 1px solid #D8E3FC; color: #23499F; }
+  .band.ai  { width: 262px; background: #F6F2FE; border: 1.5px dashed #C4AEF3; color: #6335CE; }
+  .band.hum { width: 564px; background: #EDF9F3; border: 1px solid #CDEDDF; color: #08704F; }
+  .bandgap { width: 40px; }
+
+  /* ---------- footer chips ---------- */
+  .chips { display: flex; gap: 14px; margin-top: 26px; }
+  .chip { flex: 1; border: 1px solid #E2E6EE; border-radius: 11px; background: #fff; padding: 14px 16px; }
+  .chip .k { font-size: 11px; font-weight: 700; letter-spacing: 1.1px; color: #8B97AE; }
+  .chip .v { font-size: 20px; font-weight: 650; letter-spacing: -0.5px; margin: 6px 0 3px; font-variant-numeric: tabular-nums; }
+  .chip .s { font-size: 12px; color: #6B778F; line-height: 1.4; letter-spacing: -0.05px; }
+
+  footer { margin-top: 22px; padding-top: 15px; border-top: 1px solid #E6E8EE; display: flex; justify-content: space-between;
+           font-size: 12px; color: #8B97AE; letter-spacing: -0.05px; }
+  footer b { color: #46536D; font-weight: 600; }
+</style></head><body><div class="wrap">
+
+<header>
+  <div>
+    <h1>Conduct Risk Radar</h1>
+    <div class="tagline"><b>Statistics find the anomaly.</b> The model explains one that already exists. <b>A person decides.</b></div>
+  </div>
+  <div class="srcbox">
+    <b>CFPB Consumer Complaint Database</b><br>
+    public · 160-day window · 8 products · 25 institutions<br>
+    ~86,000 complaints · runs on one free-tier Worker
+  </div>
+</header>
+
+<div class="source">
+  <div class="dot"></div><b>Source</b> — cron pulls whole days from the public CFPB API, ten weeks behind today, because that is when the records are actually complete
+</div>
+
+<div class="row">
+
+  <div class="card det">
+    <div class="top"></div>
+    <div class="body">
+      <div class="num">01 · CODE</div>
+      <div class="name">Ingest</div>
+      <div class="lede">Pull public complaints one whole day at a time, and never write the same row twice.</div>
+      <ul>
+        <li>Days read <b>whole</b> — the source silently ignores offsets</li>
+        <li>Content hash: a full re-run writes <b>zero rows</b></li>
+        <li>Recent days re-fetched daily, settled days cached</li>
+      </ul>
+    </div>
+    <div class="store">KV raw cache <span>→</span> D1 · complaints</div>
+  </div>
+
+  <div class="arrow"><svg width="40" height="24" viewBox="0 0 40 24"><path d="M2 12h30" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round"/><path d="M28 6l8 6-8 6" fill="none" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+  <div class="card det">
+    <div class="top"></div>
+    <div class="body">
+      <div class="num">02 · CODE</div>
+      <div class="name">Detect</div>
+      <div class="lede">Plain arithmetic ranks every bucket of bank × product × issue. No model involved.</div>
+      <ul>
+        <li>Last <b>14 days</b> against the previous <b>60</b></li>
+        <li><b>Six signals</b> → one 0–100 priority score</li>
+        <li>Weights declared in one file, not fitted to anything</li>
+      </ul>
+    </div>
+    <div class="store">D1 · alerts <span>+ signal contributions</span></div>
+  </div>
+
+  <div class="arrow"><svg width="40" height="24" viewBox="0 0 40 24"><path d="M2 12h30" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round"/><path d="M28 6l8 6-8 6" fill="none" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+  <div class="card ai">
+    <div class="top"></div>
+    <div class="body">
+      <div class="num">03 · MODEL</div>
+      <div class="name">Enrich</div>
+      <div class="lede">The model writes up an anomaly the numbers already found. It is never asked whether one exists.</div>
+      <ul>
+        <li><b>Sealed packet:</b> ≤15 complaints, nothing else reachable</li>
+        <li>Every factual sentence <b>cites a complaint id</b></li>
+        <li>A gate re-checks ids, figures and prohibited claims</li>
+      </ul>
+    </div>
+    <div class="flag v">Fails the gate → the alert still shows, without the prose</div>
+    <div class="store">D1 · enrichments</div>
+  </div>
+
+  <div class="arrow"><svg width="40" height="24" viewBox="0 0 40 24"><path d="M2 12h30" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round"/><path d="M28 6l8 6-8 6" fill="none" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+  <div class="card hum">
+    <div class="top"></div>
+    <div class="body">
+      <div class="num">04 · HUMAN</div>
+      <div class="name">Triage</div>
+      <div class="lede">The analyst commits to a severity before the system will show what the model proposed.</div>
+      <ul>
+        <li>Judgement <b>locked first</b>, proposal revealed second</li>
+        <li>Enforced in the API, not just the interface</li>
+        <li>Anchored dispositions are excluded outright</li>
+      </ul>
+    </div>
+    <div class="store">D1 · dispositions <span>(the answer key)</span></div>
+  </div>
+
+  <div class="arrow"><svg width="40" height="24" viewBox="0 0 40 24"><path d="M2 12h30" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round"/><path d="M28 6l8 6-8 6" fill="none" stroke="#B9C2D4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+  <div class="card hum">
+    <div class="top"></div>
+    <div class="body">
+      <div class="num">05 · GATE</div>
+      <div class="name">Evaluate</div>
+      <div class="lede">Human judgements score each prompt and model variant — segment by segment, never on the average.</div>
+      <ul>
+        <li>Broken out <b>per product and per signal</b></li>
+        <li>Ships only if <b>every</b> segment clears the bar</li>
+        <li>Validation failures counted apart from disagreements</li>
+      </ul>
+    </div>
+    <div class="store">D1 · eval_runs <span>→ ship / no ship</span></div>
+  </div>
+
+</div>
+
+<div class="bands">
+  <div class="band det">Produces correct, ranked alerts with the model switched off</div>
+  <div class="bandgap"></div>
+  <div class="band ai">The only place a model runs</div>
+  <div class="bandgap"></div>
+  <div class="band hum">A person decides, and their judgement is the yardstick</div>
+</div>
+
+<svg width="1470" height="62" style="display:block">
+  <path d="M1340 8 V 40 H 742" fill="none" stroke="#0E9F6E" stroke-width="1.6" stroke-dasharray="5 4" stroke-linecap="round"/>
+  <path d="M736 40 l 9 -5 v 10 z" fill="#0E9F6E"/>
+  <text x="1044" y="58" text-anchor="middle" font-family="-apple-system, Helvetica Neue, sans-serif" font-size="12.5" font-weight="600" fill="#08704F">human labels score the model — not the other way round</text>
+</svg>
+
+<div class="chips">
+  <div class="chip"><div class="k">MODEL OFF</div><div class="v">36 alerts</div><div class="s">ranked and explainable with the AI unbound</div></div>
+  <div class="chip"><div class="k">COST</div><div class="v">$0.0019</div><div class="s">per enrichment, p50 latency 7.4s</div></div>
+  <div class="chip"><div class="k">EVIDENCE CEILING</div><div class="v">15 complaints</div><div class="s">the model can reach nothing else</div></div>
+  <div class="chip"><div class="k">DETECTION LAG</div><div class="v">10 weeks</div><div class="s">when the source records are actually complete</div></div>
+  <div class="chip"><div class="k">SCORE MEANS</div><div class="v">Priority</div><div class="s">what to look at first — not a prediction</div></div>
+</div>
+
+<footer>
+  <div><b>Complaints are unverified allegations.</b> Nothing here asserts that any institution did anything wrong.</div>
+  <div>Cloudflare Workers · D1 · KV · Durable Objects · Workers AI</div>
+</footer>
+
+</div></body></html>
