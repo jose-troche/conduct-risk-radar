@@ -74,10 +74,12 @@ export const Q_MEDIAN_RESPONSE = `
 SELECT cell_key, AVG(response_days) AS median_response_days
 FROM (
   SELECT cell_key, response_days,
-         ROW_NUMBER() OVER (PARTITION BY cell_key ORDER BY response_days) AS rn,
-         COUNT(*)     OVER (PARTITION BY cell_key)                        AS cnt
+         ROW_NUMBER() OVER w AS rn,
+         COUNT(*)     OVER w AS cnt
   FROM complaints
   WHERE date_received >= ?1 AND date_received < ?2 AND response_days IS NOT NULL
+  WINDOW w AS (PARTITION BY cell_key ORDER BY response_days
+               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 )
 WHERE rn IN ((cnt + 1) / 2, (cnt + 2) / 2)
 GROUP BY cell_key`;

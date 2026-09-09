@@ -242,6 +242,7 @@ LIMIT ?${binds.length}`;
       env.DB.prepare(`UPDATE alerts SET status='dispositioned' WHERE id=?1`).bind(alertId),
     ]);
 
+    await invalidateStats(env);
     return json({ ok: true });
   }
 
@@ -350,7 +351,19 @@ LIMIT ?${binds.length}`;
 
   // ---- stats --------------------------------------------------------------
   if (path === "/api/stats" && method === "GET") {
-    return json(await stats(env));
+    // Served from KV. The coverage figures need COUNT(*), COUNT(DISTINCT
+    // company) and COUNT(DISTINCT cell_key) over the whole complaints table,
+    // which is a full scan - ~86k rows read per view, and growing with the
+    // table, against D1's account-wide 5M/day free tier. Nothing on this page moves between ingestion runs, so recomputing
+    // it per page view spends the read budget on an unchanged answer. The
+    // cache is dropped explicitly whenever a run changes the data.
+    const cached = await env.RAW_CACHE.get(STATS_CACHE_KEY, "json");
+    if (cached) return json(cached);
+    const fresh = await stats(env);
+    await env.RAW_CACHE.put(STATS_CACHE_KEY, JSON.stringify(fresh), {
+      expirationTtl: STATS_CACHE_TTL_SECONDS,
+    });
+    return json(fresh);
   }
 
   // ---- admin --------------------------------------------------------------
@@ -358,6 +371,7 @@ LIMIT ?${binds.length}`;
     if (!authorised(request, env)) return json({ error: "unauthorised" }, { status: 401 });
     const days = parseDaysParam(url);
     const result = days ? await ingestDays(env, days) : await cronIngest(env);
+    await invalidateStats(env);
     return json(result);
   }
 
@@ -374,7 +388,9 @@ LIMIT ?${binds.length}`;
         ),
       );
     }
-    return json(await runDetection(env, url.searchParams.get("as_of")));
+    const detected = await runDetection(env, url.searchParams.get("as_of"));
+    await invalidateStats(env);
+    return json(detected);
   }
 
   /**
@@ -407,6 +423,23 @@ function shapeAlert(a: AlertRow & { disposition_count?: number }) {
     signals_json: undefined,
     driver_complaint_ids_json: undefined,
   };
+}
+
+/**
+ * Cache coordinates for /api/stats.
+ *
+ * The key carries the shape version: change what stats() returns and the old
+ * payload must not be served to a UI expecting the new one.
+ */
+const STATS_CACHE_KEY = "stats:v1";
+/** Ceiling on staleness when a write path fails to invalidate. */
+const STATS_CACHE_TTL_SECONDS = 15 * 60;
+
+/** Drop the cached stats payload after anything that changes what it reports. */
+async function invalidateStats(env: Env): Promise<void> {
+  // Never let cache bookkeeping fail a request whose real work already
+  // committed; the TTL bounds the staleness on its own.
+  await env.RAW_CACHE.delete(STATS_CACHE_KEY).catch(() => {});
 }
 
 async function stats(env: Env) {

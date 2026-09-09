@@ -178,7 +178,7 @@ export async function runDetection(
 
 
   try {
-    const out = await scoreAllCells(env, asOf);
+    const out = await scoreAllCells(env, asOf, w);
     if (!out) throw new Error("no complaints ingested");
     const {
       candidates: allCells,
@@ -435,8 +435,14 @@ interface ScoredRun {
  * full ranking with no threshold applied, so the same code path serves both a
  * real detection run and a dry-run preview of the score distribution.
  */
-async function scoreAllCells(env: Env, asOf?: string | null): Promise<ScoredRun | null> {
-  const w = await resolveWindows(env, asOf);
+async function scoreAllCells(
+  env: Env,
+  asOf?: string | null,
+  windows?: Windows,
+): Promise<ScoredRun | null> {
+  // The caller has usually resolved the windows already; re-resolving spends
+  // another MAX(date_received) over complaints on an answer it already holds.
+  const w = windows ?? (await resolveWindows(env, asOf));
   if (!w) return null;
   let examined = 0;
   let scored_count = 0;
